@@ -43,3 +43,10 @@ Parameters
 **rho, sigma**: learning rates (network embedding, edge type bias in network embedding).
 
 **lambda**: regularizations (network embedding).
+
+
+Requirements
+-----------------
+The code can be run under Linux using Makefile for compilation.
+
+Also, the GSL package is used and can be downloaded at http://www.gnu.org/software/gsl/
