@@ -235,6 +235,10 @@ inline void EmbeddingModel::train_on_sample(const int &id, int64 &u, int64 &v,
       label = 1;
     } else {
       // target = node_sampler->sample(seed);
+      // sample both u, v randomly, works worse
+      // u = node_sampler->sample(seed, e_type, src_type);
+      // lu = u * dim;
+      // src_vec = &emb_vertex[lu];
       target = node_sampler->sample(seed, e_type, dst_type);
       label = 0;
       // random flipping sign, helpful
@@ -303,17 +307,20 @@ void EmbeddingModel::fit_thread(int id) {
   if (init_eta > 0) {
     using_transformation_vector = true;
     using_transformation_matrix = false;
+    printf("[WARNING!!!!!!!!!!!!] using_transformation_vector %d,"
+      "using_transformation_matrix %d, using_edge_type_bias %d\n",
+      using_transformation_vector, using_transformation_matrix, using_edge_type_bias);
+    printf("Exit here, comment the code if you really want to use \"bilinear\" model\n");
+    exit(-1);
   }
   if (init_sigma > 0) {
     using_edge_type_bias = true;
   }
-  printf("[Dark parameters] using_transformation_vector %d,"
-    "using_transformation_matrix %d, using_edge_type_bias %d\n",
-    using_transformation_vector, using_transformation_matrix, using_edge_type_bias);
 
   int64 u, v;
   int64 count = 0, last_count = 0, ll_count = 0, curedge;
   int64 samples_task_round = 0;
+  int direction = conf_p->path_direction_default;
   double prog = 0., ll = 0.;
   uint64 seed = static_cast<int64>(id);
   real lr_w = init_eta;
@@ -427,21 +434,26 @@ void EmbeddingModel::fit_thread(int id) {
     u = edge_source_id[curedge];
     v = edge_target_id[curedge];
 
-    const bool shuffle_direction = false;  // similar to row_reweighting in data_helper, debug
-    // if (edge_type_using_context[edge_type[curedge]])
-      // shuffle_direction = true;
-    if (shuffle_direction) {
-      train_on_sample(id, u, v, curedge, ll, seed, vec_error,
-                      e_type_bias_err_vec, w_mn_err, W_m_err);
-    } else {
+    if (use_path_conf)
+      direction = path_direction[edge_type[curedge]];
+
+    if (direction == PATH_DIRECTION_BIDIRECTION) {
       if (gsl_rand() < 0.5)
         train_on_sample(id, u, v, curedge, ll, seed, vec_error,
                         e_type_bias_err_vec, w_mn_err, W_m_err);
       else
         train_on_sample(id, v, u, curedge, ll, seed, vec_error,
                         e_type_bias_err_vec, w_mn_err, W_m_err);
+    } else if (direction == PATH_DIRECTION_NORMAL) {
+      train_on_sample(id, u, v, curedge, ll, seed, vec_error,
+                      e_type_bias_err_vec, w_mn_err, W_m_err);
+    } else if (direction == PATH_DIRECTION_REVERSE) {
+      train_on_sample(id, v, u, curedge, ll, seed, vec_error,
+                      e_type_bias_err_vec, w_mn_err, W_m_err);
+    } else {
+      printf("[ERROR!] direction %d not recognized\n", direction);
+      exit(-1);
     }
-
     count++;
     samples_task_round++;
     ll_count++;

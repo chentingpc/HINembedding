@@ -66,34 +66,11 @@ class DataHelper : public VertexHashTable {
   void load_network(string network_file, bool path_normalization = false) {
     FILE *fin;
     char name_v1[MAX_STRING], name_v2[MAX_STRING], type_name[MAX_STRING], line_buffer[MAX_LINE_LEN];
-    vector<string> valid_paths;
+    vector<string> &valid_paths = conf_p->valid_paths;
     int vid, type, num_separator = 0;
     double weight;
     clock_t start, end;
     start = clock();
-
-    // path selection
-    bool do_path_selection = false;
-    if (conf_p->path_file.size() > 0) {
-      do_path_selection = true;
-      int line_number = conf_p->path_line;  // select the path of this line, line number starting from 0
-      printf("[WARNING!!!!!!!!!!!!!!!!!!!!!!!!!!!] do path selection using line %d of file %s!!!\n",
-        line_number, conf_p->path_file.c_str());
-      FILE *fp = fopen(conf_p->path_file.c_str(), "r");
-      assert(fp != NULL);
-      while (fgets(line_buffer, sizeof(line_buffer), fp)) {
-        line_number--;
-        if (line_number < 0) {
-          int pos = 0;
-          while (line_buffer[++pos] != '\n');
-          assert(pos < MAX_LINE_LEN);  line_buffer[pos] = '\0';
-          valid_paths = split(string(line_buffer), ' ');
-          printf("valid paths: %s\n", line_buffer);
-          break;
-        }
-      }
-      fclose(fp);
-    }
 
     // count number edges
     fin = fopen(network_file.c_str(), "rb");
@@ -135,8 +112,6 @@ class DataHelper : public VertexHashTable {
       }
       if (num_separator == 2) {
         sscanf(line_buffer, "%s %s %lf", name_v1, name_v2, &weight);
-        // sscanf(line_buffer, "%s %s %s", name_v1, name_v2, type_name);
-        weight = 1;
       }
       else if (num_separator == 3) {
         sscanf(line_buffer, "%s %s %lf %s", name_v1, name_v2, &weight, type_name);
@@ -148,7 +123,7 @@ class DataHelper : public VertexHashTable {
 
       /* edge type screening */
       bool go = false;
-      if (do_path_selection) {
+      if (valid_paths.size() > 0) {
         for (vector<string>::const_iterator it = valid_paths.begin(); it != valid_paths.end();
             it ++) {
           if (strcmp(type_name, it->c_str()) == 0) {
@@ -157,7 +132,13 @@ class DataHelper : public VertexHashTable {
           }
         }
       } else {
-          go = true;  // debug
+        /* normally don't uncomment and use this
+        if (strcmp(type_name, "A2W") == 0
+            || strcmp(type_name, "A2P") == 0
+            || strcmp(type_name, "A2V") == 0
+            )
+        */
+          go = true;
       }
       if (!go) {
         // still add the vertex
@@ -185,17 +166,6 @@ class DataHelper : public VertexHashTable {
       vertex[vid].degree += weight;
       edge_target_id[k] = vid;
 
-      /* reverse edge
-      // if (strcmp(type_name, "P1A") == 0) {
-        int mid = edge_source_id[k];
-        edge_source_id[k] = edge_target_id[k];
-        edge_target_id[k] = mid;
-        char midc = type_name[0];
-        type_name[0] = type_name[2];
-        type_name[2] = midc;
-      // }
-      */
-
       edge_weight[k] = weight;
 
       if (type_name[0] != '\0') {
@@ -208,7 +178,6 @@ class DataHelper : public VertexHashTable {
         }
         edge_type[k] = type;
       }
-      // printf("%s %s %f %d\n", name_v1, name_v2, weight, type);
     }
     fclose(fin);
     printf("Number of (unique) edges: %lld          \n", num_edges);
@@ -239,8 +208,8 @@ class DataHelper : public VertexHashTable {
     memset(edge_type_w, 0, sizeof(double) * num_edge_type);
     for (int64 i = 0; i < num_edges; i++) edge_type_w[edge_type[i]] += edge_weight[i];
 
-    // normalize over row for each network
-    const bool row_reweighting = false;  // debug
+    // normalize over row for each network, not used normally
+    const bool row_reweighting = false;  // dark parameter
     if (row_reweighting) {
       double **_edge_type_degree = new double*[num_edge_type];
       for (int i = 0; i < num_edge_type; i++) {
@@ -255,22 +224,6 @@ class DataHelper : public VertexHashTable {
         edge_weight[i] = pow(edge_weight[i] / deg, NEG_SAMPLING_POWER);  // reweighting function
       }
       for (int i = 0; i < num_edge_type; i++) delete []_edge_type_degree[i];
-    }
-
-    // normalize over networks
-    // only the relative values (instead of absolute values) of each meta-path matter
-    double *weights = new double[num_edge_type]; 
-    for (int i = 0; i < num_edge_type; i ++) weights[i] = 1;
-    // set your weights for edge types here:
-    // weights[0] = 0.1; weights[1] = 0.9;
-    if (path_normalization) {
-      double *_edge_type_w = new double[num_edge_type];
-      memset(_edge_type_w, 0, sizeof(double) * num_edge_type);
-      for (int64 i = 0; i < num_edges; i++) _edge_type_w[edge_type[i]] += edge_weight[i];
-      // for (int64 i = 0; i < num_edges; i++) edge_weight[i] *= 1.000000 / _edge_type_w[edge_type[i]];
-      for (int64 i = 0; i < num_edges; i++) edge_weight[i] *= weights[edge_type[i]] / _edge_type_w[edge_type[i]];
-      delete [] _edge_type_w;
-      printf("each meta-path edge weight is normalized (to one)\n");
     }
 
     /* processing node type, edge type */
@@ -299,6 +252,60 @@ class DataHelper : public VertexHashTable {
       for (int j = 0; j < num_edge_type; j++) {
         node_type_to_edge_type[i_row_start + j] = 1;
       }
+    }
+
+    // reorder edge type configuration, if path conf is given
+    if (conf_p->use_path_conf) {
+      vector<float> path_weight;
+      vector<int> path_direction;
+      vector<int> path_order;
+      vector<float> path_sampling_pow;
+      vector<float> path_base_deg;
+      for (int i = 0; i < num_edge_type; i++) {
+        string path_name = edge_type2name[i];
+        int j;
+        for (j = 0; j < valid_paths.size(); j++) {
+          if (valid_paths[j] == path_name)
+            break;
+        }
+        assert(j != valid_paths.size());
+        path_weight.push_back(conf_p->path_weight[j]);
+        path_direction.push_back(conf_p->path_direction[j]);
+        path_order.push_back(conf_p->path_order[j]);
+        path_sampling_pow.push_back(conf_p->path_sampling_pow[j]);
+        path_base_deg.push_back(conf_p->path_base_deg[j]);
+      }
+      conf_p->path_weight = path_weight;
+      conf_p->path_direction = path_direction;
+      conf_p->path_order = path_order;
+      conf_p->path_sampling_pow = path_sampling_pow;
+      conf_p->path_base_deg = path_base_deg;
+
+      printf("[Edge type configurations] edge_type weight direction proximity/order sampling_pow base_deg\n");
+      for (int i = 0; i < num_edge_type; i++) {
+        printf("\t%s %f %d %d %f %f\n", edge_type2name[i].c_str(), conf_p->path_weight[i],
+          conf_p->path_direction[i], conf_p->path_order[i], conf_p->path_sampling_pow[i], conf_p->path_base_deg[i]);
+      }
+    }
+
+    // normalize over networks
+    // only the relative values (instead of absolute values) of each meta-path matter
+    bool use_path_conf = conf_p->use_path_conf;
+    double path_sum = conf_p->path_sum_default;
+    if (path_normalization) {
+      double *_edge_type_w = new double[num_edge_type];
+      memset(_edge_type_w, 0, sizeof(double) * num_edge_type);
+      for (int64 i = 0; i < num_edges; i++) _edge_type_w[edge_type[i]] += edge_weight[i];
+      for (int64 i = 0; i < num_edges; i++) {
+        int etype = edge_type[i];
+        if (use_path_conf) path_sum = conf_p->path_weight[etype];
+        edge_weight[i] *= path_sum / _edge_type_w[etype];
+      }
+      delete [] _edge_type_w;
+      if (use_path_conf)
+        printf("each meta-path edge weight is normalized to pre-define\n");
+      else
+        printf("each meta-path edge weight is normalized to %f\n", path_sum);
     }
 
     // compute vertex_degree_of_etype

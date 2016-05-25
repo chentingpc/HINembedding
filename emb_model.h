@@ -62,6 +62,9 @@ class EmbeddingModel {
   int64                   num_edges;
   int                     num_edge_type;
   GSLRandUniform          uniform;
+  bool                    use_path_conf;
+  vector<int>             path_direction;
+  vector<int>             path_order;
 
   bool                    fit_not_finished;
   bool                    *edge_type_using_context;
@@ -163,6 +166,11 @@ class EmbeddingModel {
     num_vertices = *graph->num_vertices_p;
     num_edges = *graph->num_edges_p;
     num_edge_type = *graph->num_edge_type_p;
+    use_path_conf = conf_p->use_path_conf;
+    if (use_path_conf) {
+      path_direction = conf_p->path_direction;
+      path_order = conf_p->path_order;
+    }
 
     init_rho = rho = conf_p->rho;
     init_eta = eta = conf_p->eta;
@@ -175,23 +183,17 @@ class EmbeddingModel {
     this->total_samples = conf_p->total_samples;
 
     edge_type_using_context = new bool[num_edge_type];
-    for (int m = 0; m < num_edge_type; m++) edge_type_using_context[m] = true;
-    const bool filter_edge_type_using_context = true;
-    if (filter_edge_type_using_context) {
-      printf("[WARNING!!!!!!!!!!!!!!!!!] Enabling the following edge type for using context:\n");
-      for (int m = 0; m < num_edge_type; m++) {
-        map<int, string>::const_iterator it = edge_type2name.find(m);
-        assert(it != edge_type2name.end());
-        if (it->second[0] == it->second[2]) {
-          edge_type_using_context[m] = true;
-          printf("%s\n", it->second.c_str());
-        }
-      }
-    }
+    if (use_path_conf)
+      for (int m = 0; m < num_edge_type; m++) edge_type_using_context[m] = conf_p->path_order[m];
+    else
+      for (int m = 0; m < num_edge_type; m++) edge_type_using_context[m] = conf_p->path_order_default;
+    printf("[using context] edge_type whether-use-context\n");
+    for (int m = 0; m < num_edge_type; m++)
+      printf("\t%s, %d\n", edge_type2name[m].c_str(), edge_type_using_context[m]);
 
     edge_type_apply_transform = new bool[num_edge_type];
     for (int m = 0; m < num_edge_type; m++) edge_type_apply_transform[m] = true;
-    const bool filter_edge_type_apply_transformation = false;
+    const bool filter_edge_type_apply_transformation = false;  // normally set to false
     if (filter_edge_type_apply_transformation) {
       printf("[WARNING!!!!!!!!!!!!!!!!!] Filtering the following edge type from transformation:\n");
       for (int m = 0; m < num_edge_type; m++) {
@@ -213,6 +215,9 @@ class EmbeddingModel {
   }
 
   void init_task_schduler() {
+    // current task switcher is mini-batch based
+    // network embedding and supervised task has same number of threads
+    // yield when the designated mini-batch finished
     current_sample_count = 0;
     current_sample_count_emb = 0;
     fit_not_finished = true;
@@ -240,7 +245,7 @@ class EmbeddingModel {
     time_t start, end;
     time(&start);
 
-    if (num_threads == 0) printf("[DEBUG!] num_threads is set to zero!!!!!!!!!!!!!!!!!!!!!!!!\n");
+    if (num_threads == 0) printf("[WARNING!] num_threads is set to zero!!!!!!!!!!!!!!!!!!!!!!!!\n");
     pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
     printf("--------------------------------\n");
     Context *context[num_threads];

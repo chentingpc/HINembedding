@@ -46,8 +46,6 @@ class VertexHashTable {
 
  public:
 
-  //VertexHashTable(uint64 hash_table_size) :
-  //    hash_table_size(hash_table_size) {
   VertexHashTable() {
     init_hash_table();
   }
@@ -133,7 +131,7 @@ inline float fast_log2 (float val) {
 }
 
 inline float fast_log (const float &val) {
-  return log(val);  // correctness is more important for this stage
+  return log(val);  // correctness is more important for now
   // return (fast_log2 (val) * 0.69314718f);  // can save like 10s+ in 170s.
 }
 

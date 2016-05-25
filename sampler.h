@@ -2,6 +2,7 @@
 #include <math.h>
 #include <cassert>
 #include "./common.h"
+#include "./config.h"
 #include "./utility.h"
 #include "./data_helper.h"
 
@@ -117,6 +118,7 @@ class NodeSampler {
                                           // indexed by i * num_node_type + j
 
   const Graph         *graph;
+  const Config        *conf_p;
   const bool          *node_type_to_edge_type;
   const Vertex        *vertex;
   const int           *vertex_type;
@@ -139,8 +141,9 @@ class NodeSampler {
   // calculate degree of node of n_type using edegs of e_type, store in vertex_degree
   void cal_degree(double *vertex_degree, const int &e_type, const int &n_type) {
     int src, dst, this_e_type, src_type, dst_type;
-    double w;
+    double w, base_deg, min_deg = 1e9;
     memset(vertex_degree, 0, num_vertices * sizeof(double));
+    // compute vertex degree of target type
     for (int64 i = 0; i < num_edges; i++) {
       src = edge_source_id[i];
       dst = edge_target_id[i];
@@ -148,6 +151,8 @@ class NodeSampler {
       this_e_type = edge_type[i];
       if (this_e_type != e_type)
         continue;
+      if (w < min_deg)
+        min_deg = w;
       src_type = vertex_type[src];
       dst_type = vertex_type[dst];
       if (src_type == n_type) {
@@ -157,28 +162,39 @@ class NodeSampler {
         vertex_degree[dst] += w;
       }
     }
+    // add base_deg (in terms of multiple of non-zero min_deg)
+    if (min_deg == 0) min_deg = 1;
+    if (conf_p->use_path_conf)
+      base_deg = conf_p->path_base_deg[e_type];
+    else
+      base_deg = conf_p->path_base_deg_default;
+    base_deg *= min_deg;
+    for (int i = 0; i < num_vertices; i++) {
+      if (vertex_type[i] == n_type)
+        vertex_degree[i] += base_deg;
+    }
   }
 
   // zero degree node will not be sampled
-  void set_table(int *table, const double *vertex_degree) {
+  void set_table(int *table, const double *vertex_degree, float neg_sampling_power) {
     double sum = 0, cur_sum = 0, por = 0, deg;
     int k = 0;
     for (int i = 0; i != num_vertices; i++) {
         deg = vertex_degree[i];
         if (deg == 0.) continue;
-        sum += pow(vertex_degree[i], NEG_SAMPLING_POWER);
+        sum += pow(vertex_degree[i], neg_sampling_power);
     }
     for (int i = 0; i < num_vertices; i++) {
         deg = vertex_degree[i];
         if (deg == 0.) continue;
-        cur_sum += pow(deg, NEG_SAMPLING_POWER);
+        cur_sum += pow(deg, neg_sampling_power);
         por = cur_sum / sum;
         while ((double)k / neg_table_size < por && k != neg_table_size) {
           table[k++] = i;
         }
     }
     if (k != neg_table_size)
-      printf("%d, %d\n", k, neg_table_size);
+      printf("[ERROR!] k %d, neg_table_size %d. check path sum. try to add base deg.\n", k, neg_table_size);
     assert(k == neg_table_size); // even this equation not hold, they should be close, check precision
   }
 
@@ -188,7 +204,7 @@ class NodeSampler {
     for (int i = 0; i < num_vertices; i++) {
       vertex_degree[i] = vertex[i].degree;
     }
-    set_table(neg_table, vertex_degree);
+    set_table(neg_table, vertex_degree, conf_p->path_sampling_pow_default);
     delete []vertex_degree;
   }
 
@@ -201,7 +217,10 @@ class NodeSampler {
         if (node_type_to_edge_type[j * num_edge_type + i]) {
           int *table = new int[neg_table_size];
           cal_degree(vertex_degree, i, j);
-          set_table(table, vertex_degree);
+          float neg_sampling_power = conf_p->path_sampling_pow_default;
+          if (conf_p->use_path_conf)
+            neg_sampling_power = conf_p->path_sampling_pow[i];
+          set_table(table, vertex_degree, neg_sampling_power);
           neg_tables[i_row_start + j] = table;
         }
         else {
@@ -213,8 +232,9 @@ class NodeSampler {
   }
 
  public:
-  explicit NodeSampler (const Graph *graph) :
-      graph(graph) {
+  explicit NodeSampler (const Graph *graph, const Config *conf_p) :
+      graph(graph),
+      conf_p(conf_p) {
     printf("Building node sampler..\r");
     fflush(stdout);
     clock_t start, end;
@@ -245,7 +265,8 @@ class NodeSampler {
 
   // build a sampler from a discrete distribution of size dist_size
   // should only use sample(seed) for sample
-  explicit NodeSampler(const double *dist, const int dist_size):
+  explicit NodeSampler(const double *dist, const int dist_size,
+        float neg_sampling_power = NEG_SAMPLING_POWER):
       graph(NULL),
       node_type_to_edge_type(NULL),
       vertex(NULL),
@@ -257,7 +278,7 @@ class NodeSampler {
       {
     num_vertices = dist_size;
     neg_table = new int[neg_table_size];
-    set_table(neg_table, dist);
+    set_table(neg_table, dist, neg_sampling_power);
   }
 
   /* Sample negative vertex samples according to aggregated vertex degrees */
