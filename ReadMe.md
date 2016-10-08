@@ -20,7 +20,8 @@ src_node dst_node weight edge_type
 
 _Note_:
 
-1. separator allowed: tab or space.
+1. separator allowed: tab or space. hence, no tab or space is allowed in ndoe name.
+2. node name for different node type should be different.
 
 **node_type file (optional?)**
 
